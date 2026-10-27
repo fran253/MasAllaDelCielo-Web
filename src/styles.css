@@ -151,6 +151,33 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
 .ctrl:hover { background: rgba(255, 255, 255, 0.07); color: #fff; }
 .ctrl.is-on { background: rgba(200, 164, 94, 0.18); color: var(--gold-bright); }
 
+/* Modo realista */
+.mode-switch { display: flex; gap: 2px; }
+.body-label.is-real { transform: translateY(-16px); }
+.datebar {
+  position: absolute; z-index: 5; left: clamp(16px, 3.4vw, 48px); top: calc(var(--header-h) + 74px); width: min(360px, calc(100vw - 32px));
+  display: grid; gap: 10px; padding: 14px 16px; border-radius: 18px;
+}
+.datebar-main { display: flex; flex-direction: column; gap: 2px; }
+.datebar-label { font-size: 10.5px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--gold); }
+.datebar-date { font-family: var(--serif); font-size: 22px; font-weight: 600; line-height: 1.2; }
+.datebar-actions { display: flex; gap: 8px; align-items: center; }
+.datebar-actions input[type='date'] {
+  flex: 1; min-width: 0; height: 34px; padding: 0 10px; border-radius: 10px; color: var(--ink); font: inherit; font-size: 13px;
+  background: rgba(255, 255, 255, 0.05); border: 1px solid var(--line-soft); color-scheme: dark;
+}
+.datebar-actions .ctrl { border: 1px solid var(--line); }
+.datebar-note { font-size: 11.5px; line-height: 1.5; color: var(--muted); font-weight: 300; }
+
+/* Con un cuerpo seleccionado, la barra de fecha se reduce a una línea para no tapar el planeta */
+@media (min-width: 901px) {
+  .has-selection .datebar { display: flex; align-items: center; gap: 14px; width: auto; padding: 8px 12px 8px 16px; border-radius: 999px; }
+  .has-selection .datebar-label,
+  .has-selection .datebar-note,
+  .has-selection .datebar-actions input { display: none; }
+  .has-selection .datebar-date { font-size: 16px; }
+}
+
 /* Dock */
 .dock {
   position: absolute; z-index: 7; left: 50%; bottom: 20px; transform: translateX(-50%);
@@ -326,7 +353,9 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   .info-panel.is-open { transform: none; }
   .panel-scroll { padding: 22px 20px 20px; }
   .hero { bottom: 130px; }
-  .has-selection .controls { display: none; }
+  .has-selection .controls, .has-selection .datebar { display: none; }
+  .datebar { top: calc(var(--header-h) + 70px); }
+  .datebar-note { display: none; }
   .hints { display: none; }
   .controls { left: 12px; right: 12px; justify-content: space-between; overflow-x: auto; scrollbar-width: none; }
   .feature, .about, .footer-grid { grid-template-columns: 1fr; }

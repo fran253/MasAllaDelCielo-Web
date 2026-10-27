@@ -4,6 +4,8 @@ import Header from './components/Header'
 import Dock from './components/Dock'
 import InfoPanel from './components/InfoPanel'
 import SceneControls from './components/SceneControls'
+import DateBar from './components/DateBar'
+import { sim } from './scene/sim'
 import { About, Footer, Videos, Worlds } from './components/Sections'
 import { BODIES, bodyById } from './data/bodies'
 
@@ -38,12 +40,21 @@ export default function App() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [paused, setPaused] = useState(false)
   const [speed, setSpeed] = useState(1)
+  const [real, setReal] = useState(false)
+  const [realSpeed, setRealSpeed] = useState(sim.realSpeed)
   const [showOrbits, setShowOrbits] = useState(true)
   const [showLabels, setShowLabels] = useState(true)
   const [stageVisible, setStageVisible] = useState(true)
   const stage = useRef<HTMLElement>(null)
 
   const select = useCallback((id: string | null) => setSelectedId(id), [])
+
+  const changeMode = useCallback((value: boolean) => {
+    // Al entrar en el modo realista se parte de la fecha de hoy.
+    if (value && !sim.real) sim.epochMs = Date.now()
+    sim.real = value
+    setReal(value)
+  }, [])
 
   // La escena deja de renderizar cuando no se ve, para no gastar batería.
   useEffect(() => {
@@ -85,12 +96,12 @@ export default function App() {
       <section id="sistema" className={`stage${body ? ' has-selection' : ''}`} ref={stage}>
         <div className="stage-canvas">
           <Suspense fallback={null}>
-            <SolarScene selectedId={selectedId} onSelect={select} showOrbits={showOrbits} showLabels={showLabels} active={stageVisible} />
+            <SolarScene selectedId={selectedId} onSelect={select} showOrbits={showOrbits} showLabels={showLabels} real={real} active={stageVisible} />
           </Suspense>
         </div>
         <div className="stage-vignette" aria-hidden="true" />
 
-        <div className={`hero${body ? ' is-hidden' : ''}`}>
+        <div className={`hero${body || real ? ' is-hidden' : ''}`}>
           <p className="overline">Sistema Solar · Experiencia 3D</p>
           <h1>
             Viaja por el <em>sistema solar</em>
@@ -104,15 +115,20 @@ export default function App() {
         </div>
 
         <SceneControls
+          real={real}
           paused={paused}
           speed={speed}
+          realSpeed={realSpeed}
           showOrbits={showOrbits}
           showLabels={showLabels}
+          onReal={changeMode}
           onPaused={setPaused}
           onSpeed={setSpeed}
+          onRealSpeed={setRealSpeed}
           onOrbits={setShowOrbits}
           onLabels={setShowLabels}
         />
+        {real && <DateBar />}
         <InfoPanel body={body} onClose={() => setSelectedId(null)} onSelect={select} />
         <Dock selectedId={selectedId} onSelect={select} />
         <Loader />

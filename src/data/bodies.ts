@@ -42,6 +42,8 @@ export interface Body {
 
   /* --- escena 3D (escala estilizada, no real) --- */
   radius: number
+  /** radio real en km (para el modo realista) */
+  realRadiusKm: number
   distance: number
   periodYears: number
   /** duración de un día en horas (negativo = rotación retrógrada) */
@@ -91,6 +93,7 @@ export const BODIES: Body[] = [
       },
     ],
     radius: 5,
+    realRadiusKm: 695700,
     distance: 0,
     periodYears: 1,
     spinHours: 609,
@@ -130,6 +133,7 @@ export const BODIES: Body[] = [
       },
     ],
     radius: 0.7,
+    realRadiusKm: 2439.7,
     distance: 11,
     periodYears: 0.241,
     spinHours: 1408,
@@ -169,6 +173,7 @@ export const BODIES: Body[] = [
       },
     ],
     radius: 1.2,
+    realRadiusKm: 6051.8,
     distance: 15.5,
     periodYears: 0.615,
     spinHours: -5832,
@@ -209,6 +214,7 @@ export const BODIES: Body[] = [
       },
     ],
     radius: 1.3,
+    realRadiusKm: 6371,
     distance: 20.5,
     periodYears: 1,
     spinHours: 24,
@@ -251,6 +257,7 @@ export const BODIES: Body[] = [
       },
     ],
     radius: 0.95,
+    realRadiusKm: 3389.5,
     distance: 26,
     periodYears: 1.881,
     spinHours: 24.6,
@@ -308,6 +315,7 @@ export const BODIES: Body[] = [
       ],
     },
     radius: 3.8,
+    realRadiusKm: 69911,
     distance: 47,
     periodYears: 11.86,
     spinHours: 9.93,
@@ -348,6 +356,7 @@ export const BODIES: Body[] = [
       },
     ],
     radius: 3.2,
+    realRadiusKm: 58232,
     distance: 65,
     periodYears: 29.46,
     spinHours: 10.55,
@@ -389,6 +398,7 @@ export const BODIES: Body[] = [
       },
     ],
     radius: 2.2,
+    realRadiusKm: 25362,
     distance: 82,
     periodYears: 84.01,
     spinHours: 17.2,
@@ -430,6 +440,7 @@ export const BODIES: Body[] = [
       },
     ],
     radius: 2.1,
+    realRadiusKm: 24622,
     distance: 96,
     periodYears: 164.8,
     spinHours: 16.1,
@@ -450,3 +461,11 @@ export const orbitSpeed = (b: Body) => (b.distance === 0 ? 0 : 0.08 / Math.pow(b
 /** Velocidad de giro sobre su eje (rad/s), también comprimida. */
 export const spinSpeed = (b: Body) =>
   (Math.sign(b.spinHours) * 0.25) / Math.pow(Math.abs(b.spinHours) / 24, 0.3)
+
+/** En el modo realista, 1 unidad de la escena = 1 radio terrestre. */
+export const EARTH_RADIUS_KM = 6371
+/** Unidades de escena que mide 1 UA en el modo realista. */
+export const AU_UNITS = 149597870.7 / EARTH_RADIUS_KM
+
+/** Radio del cuerpo en unidades de escena según el modo. */
+export const sceneRadius = (b: Body, real: boolean) => (real ? b.realRadiusKm / EARTH_RADIUS_KM : b.radius)
