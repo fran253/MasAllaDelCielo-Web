@@ -344,3 +344,12 @@ ul, ol { margin: 0; padding: 0; list-style: none; }
   html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
+
+.info-wrap { position: relative; display: inline-flex }
+.ctrl-info { padding: 0 8px }
+.info-pop {
+  position: absolute; top: calc(100% + 14px); right: -8px; width: 260px;
+  padding: 12px 14px; border-radius: 12px; font-size: 0.82rem; line-height: 1.45;
+  color: var(--text, #f3ecdc); text-align: left; z-index: 20;
+}
+@media (max-width: 600px) { .info-pop { right: -60px; width: 230px } }
