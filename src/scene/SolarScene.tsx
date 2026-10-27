@@ -5,19 +5,9 @@ import type { ThreeEvent } from '@react-three/fiber'
 import { Html, Line, OrbitControls, useTexture } from '@react-three/drei'
 import { Bloom, EffectComposer } from '@react-three/postprocessing'
 import type { OrbitControls as OrbitControlsImpl } from 'three/examples/jsm/controls/OrbitControls.js'
-import { AU_UNITS, BODIES, EARTH_RADIUS_KM, asset, bodyById, orbitSpeed, sceneRadius, spinSpeed } from '../data/bodies'
+import { BODIES, asset, bodyById, orbitSpeed, spinSpeed } from '../data/bodies'
 import type { Body } from '../data/bodies'
-import {
-  bodyFrame,
-  julianDate,
-  moonOffsetKm,
-  orbitEllipseAU,
-  planetPositionAU,
-  primeMeridianDeg,
-  rotationRateDegPerDay,
-} from './ephemeris'
-import type { Vec3 } from './ephemeris'
-import { clampEpoch, registry, sim } from './sim'
+import { registry, sim } from './sim'
 
 const PANEL_WIDTH = 440
 const PRESET_DIR = new THREE.Vector3(0, 0.34, 1).normalize()
@@ -27,50 +17,9 @@ const PRESET_DIR = new THREE.Vector3(0, 0.34, 1).normalize()
 /* ------------------------------------------------------------------ */
 function SimClock() {
   useFrame((_, dt) => {
-    if (sim.paused) return
-    const step = Math.min(dt, 0.1)
-    if (sim.real) sim.epochMs = clampEpoch(sim.epochMs + step * sim.realSpeed * 1000)
-    else sim.time += step * sim.speed
+    if (!sim.paused) sim.time += Math.min(dt, 0.1) * sim.speed
   })
   return null
-}
-
-/* ------------------------------------------------------------------ */
-/* Utilidades del modo realista                                        */
-/* ------------------------------------------------------------------ */
-/** Ejes eclípticos (x al equinoccio, z al norte) → ejes de la escena (Y arriba). */
-const toScene = (v: Vec3, k: number, out: THREE.Vector3) => out.set(v[0] * k, v[2] * k, -v[1] * k)
-
-const _fx = new THREE.Vector3()
-const _fy = new THREE.Vector3()
-const _fz = new THREE.Vector3()
-const _fm = new THREE.Matrix4()
-
-/** Orientación de un cuerpo: eje Y = polo norte, eje X = meridiano origen (longitud 0°). */
-function frameQuaternion(id: string, Wdeg: number, out: THREE.Quaternion) {
-  const { pole, prime } = bodyFrame(id, Wdeg)
-  toScene(prime, 1, _fx)
-  toScene(pole, 1, _fy)
-  _fz.crossVectors(_fx, _fy)
-  _fm.makeBasis(_fx, _fy, _fz)
-  out.setFromRotationMatrix(_fm)
-}
-
-let dotTexture: THREE.CanvasTexture | null = null
-function getDotTexture() {
-  if (!dotTexture) {
-    const c = document.createElement('canvas')
-    c.width = c.height = 64
-    const g = c.getContext('2d')!
-    const gr = g.createRadialGradient(32, 32, 0, 32, 32, 32)
-    gr.addColorStop(0, 'rgba(255,255,255,1)')
-    gr.addColorStop(0.45, 'rgba(255,255,255,0.9)')
-    gr.addColorStop(1, 'rgba(255,255,255,0)')
-    g.fillStyle = gr
-    g.fillRect(0, 0, 64, 64)
-    dotTexture = new THREE.CanvasTexture(c)
-  }
-  return dotTexture
 }
 
 /* ------------------------------------------------------------------ */
@@ -190,7 +139,6 @@ function SunGlow({ radius }: { radius: number }) {
 /* ------------------------------------------------------------------ */
 interface BodyProps {
   body: Body
-  real: boolean
   selected: boolean
   showLabel: boolean
   hovered: boolean
@@ -198,25 +146,17 @@ interface BodyProps {
   onHover: (id: string | null) => void
 }
 
-function BodyMesh({ body, real, selected, showLabel, hovered, onSelect, onHover }: BodyProps) {
+function BodyMesh({ body, selected, showLabel, hovered, onSelect, onHover }: BodyProps) {
   const orbit = useRef<THREE.Group>(null!)
-  const tilt = useRef<THREE.Group>(null!)
   const spin = useRef<THREE.Mesh>(null!)
   const clouds = useRef<THREE.Mesh>(null)
   const moon = useRef<THREE.Mesh>(null)
-  const hit = useRef<THREE.Mesh>(null!)
-  const marker = useRef<THREE.Points>(null!)
-  const phase = useRef(0)
 
   const paths = [asset(body.texture), ...(body.normalMap ? [asset(body.normalMap)] : [])]
   const [map, normal] = useTexture(paths) as THREE.Texture[]
   const cloudMap = useTexture(asset(body.clouds ?? body.texture))
   const moonMap = useTexture(asset('textures/moonmap2k.jpg'))
   const isStar = body.kind === 'star'
-  const R = sceneRadius(body, real)
-  const moonR = real ? 1737.4 / EARTH_RADIUS_KM : 0.35
-  const dot = useMemo(getDotTexture, [])
-  const markerPos = useMemo(() => new Float32Array([0, 0, 0]), [])
 
   useEffect(() => {
     registry.set(body.id, orbit.current)
@@ -229,63 +169,29 @@ function BodyMesh({ body, real, selected, showLabel, hovered, onSelect, onHover 
     map.anisotropy = 8
   }, [map])
 
-  useFrame(({ camera }, dt) => {
+  useFrame((_, dt) => {
     const g = orbit.current
-    const step = Math.min(dt, 0.1)
-
-    if (real) {
-      const jd = julianDate(sim.epochMs)
-      if (body.distance > 0) {
-        const p = planetPositionAU(body.id, jd)
-        g.position.set(p[0] * AU_UNITS, p[2] * AU_UNITS, -p[1] * AU_UNITS)
-      } else {
-        g.position.set(0, 0, 0)
-      }
-      // Orientación real: polo norte y meridiano origen. A velocidades muy altas el giro se
-      // muestra ralentizado, porque a esa cadencia sería ilegible (efecto estroboscópico).
-      const trueW = primeMeridianDeg(body.id, jd)
-      const visualRate = Math.abs(rotationRateDegPerDay(body.id)) * (sim.realSpeed / 86400)
-      if (sim.paused || visualRate <= 200) phase.current = trueW
-      else phase.current += Math.sign(rotationRateDegPerDay(body.id)) * 45 * step
-      frameQuaternion(body.id, phase.current, tilt.current.quaternion)
-      spin.current.rotation.y = 0
-      if (clouds.current) clouds.current.rotation.y = 0
-      if (moon.current) {
-        const m = moonOffsetKm(jd)
-        moon.current.position.set(m[0] / EARTH_RADIUS_KM, m[2] / EARTH_RADIUS_KM, -m[1] / EARTH_RADIUS_KM)
-        moon.current.rotation.y = Math.atan2(moon.current.position.z, -moon.current.position.x)
-      }
-    } else {
-      if (body.distance > 0) {
-        const a = body.startAngle + sim.time * orbitSpeed(body)
-        g.position.set(Math.cos(a) * body.distance, 0, -Math.sin(a) * body.distance)
-      }
-      tilt.current.rotation.set(0, 0, THREE.MathUtils.degToRad(body.tiltDeg))
-      const rot = sim.paused ? 0 : step * sim.speed
-      spin.current.rotation.y += rot * spinSpeed(body)
-      if (clouds.current) clouds.current.rotation.y += rot * spinSpeed(body) * 0.35
-      if (moon.current) {
-        const m = sim.time * 1.1
-        moon.current.position.set(Math.cos(m) * 2.9, 0, Math.sin(m) * 2.9)
-        moon.current.rotation.y = Math.atan2(moon.current.position.z, -moon.current.position.x)
-      }
+    if (body.distance > 0) {
+      const a = body.startAngle + sim.time * orbitSpeed(body)
+      g.position.set(Math.cos(a) * body.distance, 0, -Math.sin(a) * body.distance)
     }
-
-    // Zona de clic y marcador: en el modo realista los planetas son diminutos desde lejos,
-    // así que se agranda la zona de clic y se dibuja un punto del tamaño de la pantalla.
-    const camDist = camera.position.distanceTo(g.position)
-    const baseHit = isStar ? R : Math.max(R * 1.3, 1.3)
-    hit.current.scale.setScalar(real ? Math.max(R * 1.3, camDist * 0.012) : baseHit)
-    marker.current.visible = real && camDist > R * 150
+    const step = sim.paused ? 0 : Math.min(dt, 0.1) * sim.speed
+    spin.current.rotation.y += step * spinSpeed(body)
+    if (clouds.current) clouds.current.rotation.y += step * spinSpeed(body) * 0.35
+    if (moon.current) {
+      const m = sim.time * 1.1
+      moon.current.position.set(Math.cos(m) * 2.9, 0, Math.sin(m) * 2.9)
+      moon.current.rotation.y = -m
+    }
   })
+
+  const hitRadius = isStar ? body.radius : Math.max(body.radius * 1.3, 1.3)
 
   const handleClick = (e: ThreeEvent<MouseEvent>) => {
     if (e.delta > 6) return // fue un arrastre, no un clic
     e.stopPropagation()
     onSelect(body.id)
   }
-
-  const labelY = real ? R * 1.3 : R * (body.rings ? 1.5 : 1.25) + 0.9
 
   return (
     <group
@@ -297,33 +203,15 @@ function BodyMesh({ body, real, selected, showLabel, hovered, onSelect, onHover 
       }}
       onPointerOut={() => onHover(null)}
     >
-      {/* Zona de clic ampliada */}
-      <mesh ref={hit}>
-        <sphereGeometry args={[1, 16, 16]} />
+      {/* Zona de clic ampliada para planetas pequeños */}
+      <mesh>
+        <sphereGeometry args={[hitRadius, 16, 16]} />
         <meshBasicMaterial transparent opacity={0} depthWrite={false} />
       </mesh>
 
-      {/* Punto de referencia a escala real */}
-      <points ref={marker} visible={false} renderOrder={10} raycast={() => null}>
-        <bufferGeometry>
-          <bufferAttribute attach="attributes-position" args={[markerPos, 3]} />
-        </bufferGeometry>
-        <pointsMaterial
-          map={dot}
-          size={11}
-          sizeAttenuation={false}
-          color={body.accent}
-          transparent
-          depthTest={false}
-          depthWrite={false}
-          alphaTest={0.01}
-          toneMapped={false}
-        />
-      </points>
-
-      <group ref={tilt}>
+      <group rotation={[0, 0, THREE.MathUtils.degToRad(body.tiltDeg)]}>
         <mesh ref={spin}>
-          <sphereGeometry args={[R, isStar ? 96 : 128, isStar ? 96 : 128]} />
+          <sphereGeometry args={[body.radius, isStar ? 96 : 128, isStar ? 96 : 128]} />
           {isStar ? (
             <meshBasicMaterial map={map} color={new THREE.Color(1.7, 1.3, 0.9)} toneMapped={false} />
           ) : (
@@ -339,30 +227,30 @@ function BodyMesh({ body, real, selected, showLabel, hovered, onSelect, onHover 
 
         {body.clouds && (
           <mesh ref={clouds} raycast={() => null}>
-            <sphereGeometry args={[R * 1.012, 96, 96]} />
+            <sphereGeometry args={[body.radius * 1.012, 96, 96]} />
             <meshStandardMaterial map={cloudMap} transparent opacity={0.85} depthWrite={false} roughness={1} />
           </mesh>
         )}
 
-        {body.rings && <RingSet radius={R} outer={body.rings.outer} texture={body.rings.texture} opacity={body.rings.opacity} />}
+        {body.rings && (
+          <RingSet radius={body.radius} outer={body.rings.outer} texture={body.rings.texture} opacity={body.rings.opacity} />
+        )}
       </group>
 
-      {body.atmosphere && <Atmosphere radius={R} {...body.atmosphere} />}
-      {isStar && <SunGlow radius={R} />}
+      {body.atmosphere && <Atmosphere radius={body.radius} {...body.atmosphere} />}
+      {isStar && <SunGlow radius={body.radius} />}
       {isStar && <pointLight color="#fff1dc" intensity={3.6} decay={0} />}
 
       {body.id === 'tierra' && (
         <mesh ref={moon} raycast={() => null}>
-          <sphereGeometry args={[moonR, 48, 48]} />
+          <sphereGeometry args={[0.35, 48, 48]} />
           <meshStandardMaterial map={moonMap} roughness={1} />
         </mesh>
       )}
 
       {showLabel && (
-        <Html position={[0, labelY, 0]} center zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
-          <div className={`body-label${real ? ' is-real' : ''}${hovered ? ' is-hover' : ''}${selected ? ' is-selected' : ''}`}>
-            {body.name}
-          </div>
+        <Html position={[0, body.radius * (body.rings ? 1.5 : 1.25) + 0.9, 0]} center zIndexRange={[20, 0]} style={{ pointerEvents: 'none' }}>
+          <div className={`body-label${hovered ? ' is-hover' : ''}${selected ? ' is-selected' : ''}`}>{body.name}</div>
         </Html>
       )}
     </group>
@@ -372,17 +260,15 @@ function BodyMesh({ body, real, selected, showLabel, hovered, onSelect, onHover 
 /* ------------------------------------------------------------------ */
 /* Órbitas, asteroides y fondo                                         */
 /* ------------------------------------------------------------------ */
-function OrbitLine({ body, real, active }: { body: Body; real: boolean; active: boolean }) {
-  const points = useMemo(() => {
-    if (real) {
-      const v = new THREE.Vector3()
-      return orbitEllipseAU(body.id, julianDate(sim.epochMs), 256).map((p) => toScene(p, AU_UNITS, v).clone())
-    }
-    return Array.from({ length: 257 }, (_, i) => {
-      const a = (i / 256) * Math.PI * 2
-      return new THREE.Vector3(Math.cos(a) * body.distance, 0, Math.sin(a) * body.distance)
-    })
-  }, [body.id, body.distance, real])
+function OrbitLine({ radius, active }: { radius: number; active: boolean }) {
+  const points = useMemo(
+    () =>
+      Array.from({ length: 257 }, (_, i) => {
+        const a = (i / 256) * Math.PI * 2
+        return new THREE.Vector3(Math.cos(a) * radius, 0, Math.sin(a) * radius)
+      }),
+    [radius],
+  )
   return (
     <Line
       points={points}
@@ -391,63 +277,59 @@ function OrbitLine({ body, real, active }: { body: Body; real: boolean; active: 
       transparent
       opacity={active ? 0.6 : 0.16}
       depthWrite={false}
-      frustumCulled={false}
       raycast={() => null}
     />
   )
 }
 
-function AsteroidBelt({ real }: { real: boolean }) {
+function makeDotTexture() {
+  const c = document.createElement('canvas')
+  c.width = c.height = 32
+  const g = c.getContext('2d')!
+  const gr = g.createRadialGradient(16, 16, 0, 16, 16, 16)
+  gr.addColorStop(0, 'rgba(255,255,255,1)')
+  gr.addColorStop(0.5, 'rgba(255,255,255,0.7)')
+  gr.addColorStop(1, 'rgba(255,255,255,0)')
+  g.fillStyle = gr
+  g.fillRect(0, 0, 32, 32)
+  return new THREE.CanvasTexture(c)
+}
+
+function AsteroidBelt() {
   const group = useRef<THREE.Group>(null!)
-  const dot = useMemo(getDotTexture, [])
+  const dot = useMemo(makeDotTexture, [])
   const geometry = useMemo(() => {
     const n = 4500
     const p = new Float32Array(n * 3)
     for (let i = 0; i < n; i++) {
       const a = Math.random() * Math.PI * 2
-      const g3 = (Math.random() + Math.random() + Math.random()) / 3
-      if (real) {
-        // Cinturón principal: entre ~2,1 y 3,3 UA, con inclinaciones de unos grados.
-        const r = (2.1 + g3 * 1.2) * AU_UNITS
-        const incl = (Math.random() + Math.random() - 1) * 0.2
-        p[i * 3] = Math.cos(a) * r
-        p[i * 3 + 1] = Math.sin(a) * Math.sin(incl) * r
-        p[i * 3 + 2] = -Math.sin(a) * r
-      } else {
-        const r = 31 + g3 * 9
-        p[i * 3] = Math.cos(a) * r
-        p[i * 3 + 1] = (Math.random() - 0.5) * 1.2 * (0.4 + Math.random())
-        p[i * 3 + 2] = Math.sin(a) * r
-      }
+      const r = 31 + ((Math.random() + Math.random() + Math.random()) / 3) * 9
+      const y = (Math.random() - 0.5) * 1.2 * (0.4 + Math.random())
+      p[i * 3] = Math.cos(a) * r
+      p[i * 3 + 1] = y
+      p[i * 3 + 2] = Math.sin(a) * r
     }
     const g = new THREE.BufferGeometry()
     g.setAttribute('position', new THREE.BufferAttribute(p, 3))
     return g
-  }, [real])
+  }, [])
   useFrame((_, dt) => {
-    if (!real && !sim.paused) group.current.rotation.y += Math.min(dt, 0.1) * sim.speed * 0.004
+    if (!sim.paused) group.current.rotation.y += Math.min(dt, 0.1) * sim.speed * 0.004
   })
   return (
     <group ref={group}>
-      <points geometry={geometry} raycast={() => null} frustumCulled={false}>
-        {real ? (
-          <pointsMaterial map={dot} size={2} sizeAttenuation={false} color="#b0a08a" transparent opacity={0.5} depthWrite={false} alphaTest={0.02} />
-        ) : (
-          <pointsMaterial map={dot} size={0.2} color="#b0a08a" sizeAttenuation transparent opacity={0.6} depthWrite={false} alphaTest={0.02} />
-        )}
+      <points geometry={geometry} raycast={() => null}>
+        <pointsMaterial map={dot} size={0.2} color="#b0a08a" sizeAttenuation transparent opacity={0.6} depthWrite={false} alphaTest={0.02} />
       </points>
     </group>
   )
 }
 
-function Starfield({ real }: { real: boolean }) {
+function Starfield() {
   const map = useTexture(asset('textures/galaxy_starfield.jpg'))
-  const ref = useRef<THREE.Mesh>(null!)
-  // El fondo acompaña a la cámara, así queda siempre "en el infinito" aunque se viaje enormes distancias.
-  useFrame(({ camera }) => ref.current.position.copy(camera.position))
   return (
-    <mesh ref={ref} rotation={[0.5, 1.2, 0]} scale={real ? 9e6 : 2200} raycast={() => null} frustumCulled={false}>
-      <sphereGeometry args={[1, 64, 64]} />
+    <mesh rotation={[0.5, 1.2, 0]} raycast={() => null}>
+      <sphereGeometry args={[2200, 64, 64]} />
       <meshBasicMaterial map={map} side={THREE.BackSide} color="#8d97b4" toneMapped={false} depthWrite={false} />
     </mesh>
   )
@@ -458,16 +340,14 @@ function Starfield({ real }: { real: boolean }) {
 /* ------------------------------------------------------------------ */
 interface RigProps {
   selectedId: string | null
-  real: boolean
   controls: React.MutableRefObject<OrbitControlsImpl | null>
 }
 
-function CameraRig({ selectedId, real, controls }: RigProps) {
+function CameraRig({ selectedId, controls }: RigProps) {
   const { camera, size } = useThree()
   const transition = useRef(true)
   const shiftX = useRef(0)
   const shiftY = useRef(0)
-  const followed = useRef<string | null>(null)
   const v = useMemo(
     () => ({
       target: new THREE.Vector3(),
@@ -475,14 +355,13 @@ function CameraRig({ selectedId, real, controls }: RigProps) {
       offset: new THREE.Vector3(),
       dir: new THREE.Vector3(),
       delta: new THREE.Vector3(),
-      last: new THREE.Vector3(),
     }),
     [],
   )
 
   useEffect(() => {
     transition.current = true
-  }, [selectedId, real])
+  }, [selectedId])
 
   useEffect(() => {
     const c = controls.current
@@ -503,47 +382,33 @@ function CameraRig({ selectedId, real, controls }: RigProps) {
     if (sel && obj) obj.getWorldPosition(v.target)
     else v.target.set(0, 0, 0)
 
-    // Seguimiento: la cámara acompaña al cuerpo en su órbita, incluso mientras viaja hacia él.
-    // (Si no se compensara su movimiento, a velocidades altas la cámara nunca lo alcanzaría.)
-    if (sel && followed.current === sel.id) {
-      v.delta.copy(v.target).sub(v.last)
-      c.target.add(v.delta)
-      camera.position.add(v.delta)
-    }
-    v.last.copy(v.target)
-    followed.current = sel ? sel.id : null
-
-    const aspect = size.width / size.height
     if (transition.current) {
       const k = 1 - Math.exp(-3.4 * dt)
       v.prev.copy(c.target)
       v.offset.copy(camera.position).sub(v.prev)
       let len = v.offset.length()
+      const overview = size.width / size.height < 1 ? 330 : 225
+      const aspect = size.width / size.height
       const portraitBoost = THREE.MathUtils.clamp(0.9 / aspect, 1, 2.2)
-      const overview = real ? (aspect < 1 ? 2.6e6 : 1.5e6) : aspect < 1 ? 330 : 225
-      const desired = sel ? sceneRadius(sel, real) * sel.focus * portraitBoost : overview
+      const desired = sel ? sel.radius * sel.focus * portraitBoost : overview
       v.dir.copy(v.offset).normalize()
       if (!sel) v.dir.lerp(PRESET_DIR, k * 0.6).normalize()
-      // La distancia se interpola en escala logarítmica: así el viaje es igual de fluido
-      // entre 6 unidades que entre un millón.
-      len = Math.exp(THREE.MathUtils.damp(Math.log(len), Math.log(desired), 2.4, dt))
+      len = THREE.MathUtils.damp(len, desired, 3, dt)
       c.target.lerp(v.target, k)
       camera.position.copy(c.target).addScaledVector(v.dir, len)
-      if (Math.abs(Math.log(len / desired)) < 0.02 && c.target.distanceTo(v.target) < Math.max(desired * 0.01, 0.02)) {
+      if (Math.abs(len - desired) < desired * 0.015 && c.target.distanceTo(v.target) < Math.max(desired * 0.01, 0.02)) {
         transition.current = false
       }
+    } else if (sel) {
+      // Seguimiento rígido: la cámara acompaña al planeta en su órbita.
+      v.delta.copy(v.target).sub(c.target)
+      c.target.add(v.delta)
+      camera.position.add(v.delta)
     }
 
-    c.minDistance = sel ? sceneRadius(sel, real) * 1.5 : Math.min(real ? 150 : 10, camera.position.distanceTo(c.target))
-    c.maxDistance = real ? 8e6 : 760
-    c.zoomSpeed = real ? 1.8 : 0.75
+    c.minDistance = sel ? sel.radius * 1.5 : Math.min(10, camera.position.distanceTo(c.target))
+    c.maxDistance = 760
     c.enablePan = !sel
-
-    // Planos de recorte adaptados a la escala (en el modo realista hay millones de unidades).
-    const cam = camera as THREE.PerspectiveCamera
-    const dist = camera.position.distanceTo(c.target)
-    cam.near = real ? THREE.MathUtils.clamp(dist * 0.02, 0.02, 1e4) : 0.05
-    cam.far = real ? 3e7 : 6000
 
     // Desplaza el encuadre para que el planeta no quede tapado por el panel de información.
     const wideScreen = size.width > 900
@@ -551,9 +416,9 @@ function CameraRig({ selectedId, real, controls }: RigProps) {
     const wantY = sel && !wideScreen ? size.height * 0.25 : 0
     shiftX.current = THREE.MathUtils.damp(shiftX.current, wantX, 4, dt)
     shiftY.current = THREE.MathUtils.damp(shiftY.current, wantY, 4, dt)
+    const cam = camera as THREE.PerspectiveCamera
     if (Math.abs(shiftX.current) < 0.3 && Math.abs(shiftY.current) < 0.3 && !wantX && !wantY) {
       if (cam.view?.enabled) cam.clearViewOffset()
-      cam.updateProjectionMatrix()
     } else {
       cam.setViewOffset(size.width, size.height, shiftX.current, shiftY.current, size.width, size.height)
     }
@@ -563,10 +428,10 @@ function CameraRig({ selectedId, real, controls }: RigProps) {
 }
 
 /** Avisa cuando la cámara está lo bastante cerca del centro como para mostrar los nombres de los planetas interiores. */
-function ZoomWatcher({ real, onChange }: { real: boolean; onChange: (near: boolean) => void }) {
+function ZoomWatcher({ onChange }: { onChange: (near: boolean) => void }) {
   const last = useRef<boolean | null>(null)
   useFrame(({ camera }) => {
-    const near = camera.position.length() < (real ? 350000 : 120)
+    const near = camera.position.length() < 120
     if (last.current !== near) {
       last.current = near
       onChange(near)
@@ -583,11 +448,10 @@ export interface SolarSceneProps {
   onSelect: (id: string | null) => void
   showOrbits: boolean
   showLabels: boolean
-  real: boolean
   active: boolean
 }
 
-export default function SolarScene({ selectedId, onSelect, showOrbits, showLabels, real, active }: SolarSceneProps) {
+export default function SolarScene({ selectedId, onSelect, showOrbits, showLabels, active }: SolarSceneProps) {
   const controls = useRef<OrbitControlsImpl | null>(null)
   const [hovered, setHovered] = useState<string | null>(null)
   const [nearView, setNearView] = useState(false)
@@ -604,20 +468,22 @@ export default function SolarScene({ selectedId, onSelect, showOrbits, showLabel
       frameloop={active ? 'always' : 'never'}
       dpr={[1, 2]}
       flat
-      camera={{ position: [0, 90, 330], fov: 42, near: 0.05, far: 6000 }}
+      camera={{ position: [0, 90, 330], fov: 42, near: 0.05, far: 5000 }}
       gl={{ antialias: true, powerPreference: 'high-performance' }}
+      onPointerMissed={() => {
+        /* un clic en el vacío no cierra nada: se cierra con la X o con Esc */
+      }}
     >
       <color attach="background" args={['#02060f']} />
       <ambientLight intensity={0.9} color="#7a8cc0" />
       <Suspense fallback={null}>
         <SimClock />
-        <ZoomWatcher real={real} onChange={setNearView} />
-        <Starfield real={real} />
+        <ZoomWatcher onChange={setNearView} />
+        <Starfield />
         {BODIES.map((b) => (
           <BodyMesh
             key={b.id}
             body={b}
-            real={real}
             selected={selectedId === b.id}
             showLabel={showLabels && !selectedId && (b.distance >= 40 || nearView)}
             hovered={hovered === b.id}
@@ -626,10 +492,8 @@ export default function SolarScene({ selectedId, onSelect, showOrbits, showLabel
           />
         ))}
         {showOrbits &&
-          BODIES.filter((b) => b.distance > 0).map((b) => (
-            <OrbitLine key={`${b.id}-${real}`} body={b} real={real} active={selectedId === b.id} />
-          ))}
-        <AsteroidBelt real={real} />
+          BODIES.filter((b) => b.distance > 0).map((b) => <OrbitLine key={b.id} radius={b.distance} active={selectedId === b.id} />)}
+        <AsteroidBelt />
         <EffectComposer multisampling={4}>
           <Bloom mipmapBlur intensity={0.95} luminanceThreshold={1} luminanceSmoothing={0.15} radius={0.75} />
         </EffectComposer>
@@ -640,10 +504,11 @@ export default function SolarScene({ selectedId, onSelect, showOrbits, showLabel
         enableDamping
         dampingFactor={0.07}
         rotateSpeed={0.55}
+        zoomSpeed={0.75}
         panSpeed={0.6}
         screenSpacePanning
       />
-      <CameraRig selectedId={selectedId} real={real} controls={controls} />
+      <CameraRig selectedId={selectedId} controls={controls} />
     </Canvas>
   )
 }
